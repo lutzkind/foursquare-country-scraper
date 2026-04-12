@@ -43,7 +43,7 @@ async function queryFoursquare({ job, shard, geometry, config }) {
 
   const results = await queueFoursquareRequest(async () => {
     const params = new URLSearchParams({
-      ll: `${center[1]},${center[0]}`,
+      ll: `${center.lat},${center.lon}`,
       radius: String(radiusMeters),
       limit: String(PAGE_LIMIT),
       fields: "fsq_id,name,categories,geocodes,location,tel,website,rating,stats,price,closed_bucket",
@@ -74,8 +74,8 @@ async function queryFoursquare({ job, shard, geometry, config }) {
     .map((b) => normalizeEntry(b, shard.bbox))
     .filter((lead) => {
       if (!Number.isFinite(lead.lat) || !Number.isFinite(lead.lon)) return false;
-      if (!pointInsideBBox(lead.lon, lead.lat, shard.bbox)) return false;
-      if (geometry && !pointInsideGeometry(lead.lon, lead.lat, geometry)) return false;
+      if (!pointInsideBBox(lead.lat, lead.lon, shard.bbox)) return false;
+      if (geometry && !pointInsideGeometry(lead.lat, lead.lon, geometry)) return false;
       return true;
     });
 
@@ -113,7 +113,6 @@ function normalizeEntry(place, bbox) {
     lat,
     lon,
     reviewCount: place.stats?.total_ratings || 0,
-    // Foursquare rates 0–10; convert to 0–5 for consistency
     reviewRating: place.rating != null ? Math.round((place.rating / 2) * 10) / 10 : null,
     status:
       place.closed_bucket === "VeryLikelyClosed" || place.closed_bucket === "LikelyClosed"
