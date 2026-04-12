@@ -25,6 +25,10 @@ function createWorker({ store, config, nocoDb = null }) {
       try {
         recoverStaleRunningShards();
         await bootstrapPendingJobs();
+
+        // Refuse to process shards when credits are critically low
+        if (creditsExhausted()) return;
+
         const shard = store.claimNextShard();
         if (!shard) { await maybeSyncRunningJobs(); return; }
         const job = store.getJob(shard.jobId);
@@ -40,6 +44,29 @@ function createWorker({ store, config, nocoDb = null }) {
       }
     },
   };
+
+  // Returns true if saved remaining credits are below the configured floor.
+  function creditsExhausted() {
+    const remaining = store.getAppSetting("foursquare.remainingCredits", -1);
+    if (remaining < 0) return false; // never seen a header yet — allow through
+    return remaining < config.foursquareMinCreditsRemaining;
+  }
+
+  // Called after every successful or failed API response that includes a credit count.
+  function applyRemainingCredits(remainingCredits) {
+    if (!Number.isFinite(remainingCredits) || remainingCredits < 0) return;
+    store.setAppSettings({ "foursquare.remainingCredits": remainingCredits });
+    if (remainingCredits < config.foursquareMinCreditsRemaining) {
+      console.warn(
+        `[credit-guard] Foursquare credits critically low: ${remainingCredits} remaining ` +
+        `(floor: ${config.foursquareMinCreditsRemaining}). Pausing all running jobs.`
+      );
+      for (const job of store.listJobs().filter((j) => j.status === "running")) {
+        store.pauseJob(job.id);
+        console.warn(`[credit-guard] Paused job ${job.id} (${job.country} / ${job.keyword}).`);
+      }
+    }
+  }
 
   async function bootstrapPendingJobs() {
     const jobs = store.listJobs().filter((j) => j.status === "pending");
@@ -71,7 +98,17 @@ function createWorker({ store, config, nocoDb = null }) {
     try {
       const response = await queryFoursquare({ job, shard, geometry, config });
 
+      // Update credit tracking after every successful call
+      applyRemainingCredits(response.remainingCredits);
+
       if (store.getJob(job.id)?.status === "canceled") return;
+
+      // If we just triggered a pause via applyRemainingCredits, the job is now paused —
+      // don't process the shard result, release it back to retry.
+      if (creditsExhausted()) {
+        store.retryShard(shard.id, "Paused: Foursquare credits below minimum threshold.", 60_000, shard.runToken);
+        return;
+      }
 
       // Foursquare caps at 50 results per request with no pagination.
       // If we hit the cap and can still split, do so to get better coverage.
@@ -83,6 +120,11 @@ function createWorker({ store, config, nocoDb = null }) {
       // At a leaf shard or below threshold — save what we have.
       store.completeShard(shard.id, response.leads, shard.runToken);
     } catch (error) {
+      // Credits may arrive even on error responses
+      if (Number.isFinite(error.remainingCredits)) {
+        applyRemainingCredits(error.remainingCredits);
+      }
+
       const isRateOrTimeout =
         error.name === "AbortError" ||
         error.statusCode === 429 ||

@@ -62,6 +62,10 @@ module.exports = {
   foursquareDelayMs: intFromEnv("FOURSQUARE_DELAY_MS", 200),
   foursquareTimeoutMs: intFromEnv("FOURSQUARE_TIMEOUT_MS", 30000),
   foursquareTargetShardRadiusMeters: intFromEnv("FOURSQUARE_TARGET_SHARD_RADIUS_METERS", 15000),
+  // When X-RateLimit-Remaining drops to this value or below, all running jobs
+  // are automatically paused to protect the remaining credit pool.
+  // Resume jobs manually from the dashboard once credits have refreshed.
+  foursquareMinCreditsRemaining: intFromEnv("FOURSQUARE_MIN_CREDITS_REMAINING", 100),
   nocoDb: {
     baseUrl: process.env.NOCODB_BASE_URL || null,
     apiToken: process.env.NOCODB_API_TOKEN || null,

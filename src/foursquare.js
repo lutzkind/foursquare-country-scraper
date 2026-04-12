@@ -41,7 +41,7 @@ async function queryFoursquare({ job, shard, geometry, config }) {
   const radiusMeters = Math.min(Math.round(bboxRadiusMeters(shard.bbox) / 2), MAX_RADIUS_METERS);
   const query = job.searchParams?.query || job.keyword;
 
-  const results = await queueFoursquareRequest(async () => {
+  const raw = await queueFoursquareRequest(async () => {
     const params = new URLSearchParams({
       ll: `${center.lat},${center.lon}`,
       radius: String(radiusMeters),
@@ -58,19 +58,25 @@ async function queryFoursquare({ job, shard, geometry, config }) {
       signal: AbortSignal.timeout(config.foursquareTimeoutMs),
     });
 
+    // Capture credit headers before consuming the body
+    const remainingCredits = parseRateLimitHeader(response);
+
     if (!response.ok) {
       const text = await response.text().catch(() => "");
       const err = new Error(`Foursquare error ${response.status}: ${text.slice(0, 200)}`);
       err.statusCode = response.status;
+      err.remainingCredits = remainingCredits;
       throw err;
     }
 
     const data = await response.json();
-    return data.results || [];
+    return { results: data.results || [], remainingCredits };
   }, config.foursquareDelayMs);
 
-  const rawCount = results.length;
-  const leads = results
+  const rawCount = raw.results.length;
+  const remainingCredits = raw.remainingCredits;
+
+  const leads = raw.results
     .map((b) => normalizeEntry(b, shard.bbox))
     .filter((lead) => {
       if (!Number.isFinite(lead.lat) || !Number.isFinite(lead.lon)) return false;
@@ -79,7 +85,19 @@ async function queryFoursquare({ job, shard, geometry, config }) {
       return true;
     });
 
-  return { rawCount, leads };
+  return { rawCount, leads, remainingCredits };
+}
+
+function parseRateLimitHeader(response) {
+  // Foursquare v3 uses X-RateLimit-Remaining; fall back to the IETF draft header
+  for (const name of ["X-RateLimit-Remaining", "RateLimit-Remaining", "x-ratelimit-remaining"]) {
+    const value = response.headers.get(name);
+    if (value != null) {
+      const parsed = Number.parseInt(value, 10);
+      if (Number.isFinite(parsed)) return parsed;
+    }
+  }
+  return -1; // header not present
 }
 
 function normalizeEntry(place, bbox) {
