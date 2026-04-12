@@ -182,7 +182,7 @@ function createStore(config) {
           countryName: countryData.displayName,
           countryCode: countryData.countryCode,
           bboxJson: JSON.stringify(countryData.bbox),
-          geometryJson: JSON.stringify(countryData.geometry?.geometry || null),
+          geometryJson: JSON.stringify(countryData.geometry || null),
           timestamp,
         });
 

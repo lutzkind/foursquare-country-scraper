@@ -22,17 +22,17 @@ async function resolveCountry(countryName, config) {
   const results = await response.json();
   if (!results.length) throw new Error(`Country not found: ${countryName}`);
   const result = results[0];
-  const bbox = [
-    parseFloat(result.boundingbox[2]),
-    parseFloat(result.boundingbox[0]),
-    parseFloat(result.boundingbox[3]),
-    parseFloat(result.boundingbox[1]),
-  ];
+  const bbox = {
+    south: parseFloat(result.boundingbox[0]),
+    north: parseFloat(result.boundingbox[1]),
+    west: parseFloat(result.boundingbox[2]),
+    east: parseFloat(result.boundingbox[3]),
+  };
   return {
     displayName: result.display_name,
     countryCode: result.address?.country_code?.toUpperCase() || "",
     bbox,
-    geometry: result,
+    geometry: result.geojson || null,
   };
 }
 
