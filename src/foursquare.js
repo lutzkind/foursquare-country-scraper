@@ -1,6 +1,6 @@
 const { bboxCenter, bboxRadiusMeters, pointInsideBBox, pointInsideGeometry } = require("./geo");
 
-const SEARCH_URL = "https://api.foursquare.com/v3/places/search";
+const SEARCH_URL = "https://places-api.foursquare.com/places/search";
 const MAX_RADIUS_METERS = 100000;
 const PAGE_LIMIT = 50;
 
@@ -46,14 +46,14 @@ async function queryFoursquare({ job, shard, geometry, config }) {
       ll: `${center.lat},${center.lon}`,
       radius: String(radiusMeters),
       limit: String(PAGE_LIMIT),
-      fields: "fsq_id,name,categories,geocodes,location,tel,website,rating,stats,price,closed_bucket",
     });
     if (query) params.set("query", query);
 
     const response = await fetch(`${SEARCH_URL}?${params}`, {
       headers: {
         Accept: "application/json",
-        Authorization: config.foursquareApiKey,
+        Authorization: buildAuthorizationHeader(config.foursquareApiKey),
+        "X-Places-Api-Version": config.foursquareApiVersion,
       },
       signal: AbortSignal.timeout(config.foursquareTimeoutMs),
     });
@@ -66,6 +66,7 @@ async function queryFoursquare({ job, shard, geometry, config }) {
       const err = new Error(`Foursquare error ${response.status}: ${text.slice(0, 200)}`);
       err.statusCode = response.status;
       err.remainingCredits = remainingCredits;
+      err.responseText = text;
       throw err;
     }
 
@@ -77,7 +78,7 @@ async function queryFoursquare({ job, shard, geometry, config }) {
   const remainingCredits = raw.remainingCredits;
 
   const leads = raw.results
-    .map((b) => normalizeEntry(b, shard.bbox))
+    .map((b) => normalizeEntry(b, shard.bbox, center))
     .filter((lead) => {
       if (!Number.isFinite(lead.lat) || !Number.isFinite(lead.lon)) return false;
       if (!pointInsideBBox(lead.lat, lead.lon, shard.bbox)) return false;
@@ -100,21 +101,32 @@ function parseRateLimitHeader(response) {
   return -1; // header not present
 }
 
-function normalizeEntry(place, bbox) {
+function buildAuthorizationHeader(apiKey) {
+  const normalized = String(apiKey || "").trim();
+  if (!normalized) return normalized;
+  return /^Bearer\s+/i.test(normalized) ? normalized : `Bearer ${normalized}`;
+}
+
+function normalizeEntry(place, bbox, fallbackCenter = null) {
   const mainGeo = place.geocodes?.main || {};
-  const lat = mainGeo.latitude;
-  const lon = mainGeo.longitude;
+  const lat = mainGeo.latitude ?? fallbackCenter?.lat ?? null;
+  const lon = mainGeo.longitude ?? fallbackCenter?.lon ?? null;
   const location = place.location || {};
   const categories = (place.categories || []).map((c) => c.name).filter(Boolean);
   const primaryCategory = categories[0] || "";
   const parts = extractLocationParts(place);
+  const placeId = place.fsq_place_id || place.fsq_id || null;
 
   return {
-    dedupeKey: place.fsq_id,
-    placeId: place.fsq_id,
+    dedupeKey: placeId || `${place.name || "unknown"}:${lat}:${lon}`,
+    placeId,
     cid: null,
     dataId: null,
-    link: `https://foursquare.com/v/${place.fsq_id}`,
+    link: place.link
+      ? `https://foursquare.com${place.link}`
+      : placeId
+        ? `https://foursquare.com/v/${placeId}`
+        : null,
     name: place.name || "",
     category: primaryCategory,
     categories,
@@ -153,4 +165,10 @@ function extractLocationParts(place) {
   };
 }
 
-module.exports = { resolveCountry, queryFoursquare, normalizeEntry, extractLocationParts };
+module.exports = {
+  resolveCountry,
+  queryFoursquare,
+  normalizeEntry,
+  extractLocationParts,
+  buildAuthorizationHeader,
+};

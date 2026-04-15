@@ -125,6 +125,10 @@ function createWorker({ store, config, nocoDb = null }) {
         applyRemainingCredits(error.remainingCredits);
       }
 
+      const isTerminalAuthOrEndpointError =
+        error.statusCode === 401 ||
+        error.statusCode === 403 ||
+        error.statusCode === 410;
       const isRateOrTimeout =
         error.name === "AbortError" ||
         error.statusCode === 429 ||
@@ -133,6 +137,18 @@ function createWorker({ store, config, nocoDb = null }) {
         /timeout|rate.limit|blocked/i.test(error.message);
 
       if (store.getJob(job.id)?.status === "canceled") return;
+
+      if (isTerminalAuthOrEndpointError) {
+        store.failShard(shard.id, error.message, shard.runToken);
+        store.finalizeJob(
+          job.id,
+          "failed",
+          error.statusCode === 410
+            ? "Foursquare legacy endpoint rejected the request. Migrate this scraper to the current Places API."
+            : "Foursquare authentication failed. Check that FOURSQUARE_API_KEY is a valid Places API key."
+        );
+        return;
+      }
 
       if (isRateOrTimeout && canSplit && shard.attemptCount >= 2) {
         store.splitShard(shard.id, splitBBox(shard.bbox), shard.runToken);

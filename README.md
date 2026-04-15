@@ -1,6 +1,6 @@
 # foursquare-country-scraper
 
-Country-scale place scraper powered by the [Foursquare Places API v3](https://docs.foursquare.com/developer/reference/place-search). Splits a country bounding box into a quadtree of shards, queries each shard at its centroid with a configurable radius, and recursively splits shards that hit the 50-result cap.
+Country-scale place scraper powered by the [current Foursquare Places API](https://docs.foursquare.com/fsq-developers-places/reference/place-search). Splits a country bounding box into a quadtree of shards, queries each shard at its centroid with a configurable radius, and recursively splits shards that hit the 50-result cap.
 
 Architecture mirrors [gmaps-country-scraper](https://github.com/lutzkind/gmaps-country-scraper) and [osm-country-scraper](https://github.com/lutzkind/osm-country-scraper).
 
@@ -8,7 +8,8 @@ Architecture mirrors [gmaps-country-scraper](https://github.com/lutzkind/gmaps-c
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
-| `FOURSQUARE_API_KEY` | Yes | — | Foursquare Places API key |
+| `FOURSQUARE_API_KEY` | Yes | — | Current Foursquare Service API Key used for Place Search requests |
+| `FOURSQUARE_API_VERSION` | No | `2025-06-17` | Required `X-Places-Api-Version` header for current Place Search requests |
 | `ADMIN_USERNAME` | Yes | — | Dashboard login username |
 | `ADMIN_PASSWORD` | Yes | — | Dashboard login password |
 | `DATA_DIR` | No | `/data` | Persistent data directory |
@@ -29,6 +30,14 @@ docker run -d \
   -p 3000:3000 \
   ghcr.io/lutzkind/foursquare-country-scraper
 ```
+
+## Authentication notes
+
+- This scraper uses the current Places Search endpoint at `https://places-api.foursquare.com/places/search`.
+- Use a Service API Key from the project `Settings` page in `FOURSQUARE_API_KEY`.
+- Requests are sent as `Authorization: Bearer <service_api_key>`.
+- Do not use `Client ID` / `Client Secret` from the legacy OAuth section for this scraper.
+- Do not use a Legacy API Key for the new Places Search endpoint.
 
 ## API
 

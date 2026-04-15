@@ -59,6 +59,7 @@ module.exports = {
   sessionTtlHours: intFromEnv("SESSION_TTL_HOURS", 24),
   // Foursquare Places API key — https://developer.foursquare.com/
   foursquareApiKey: process.env.FOURSQUARE_API_KEY || null,
+  foursquareApiVersion: process.env.FOURSQUARE_API_VERSION || "2025-06-17",
   foursquareDelayMs: intFromEnv("FOURSQUARE_DELAY_MS", 200),
   foursquareTimeoutMs: intFromEnv("FOURSQUARE_TIMEOUT_MS", 30000),
   foursquareTargetShardRadiusMeters: intFromEnv("FOURSQUARE_TARGET_SHARD_RADIUS_METERS", 15000),
