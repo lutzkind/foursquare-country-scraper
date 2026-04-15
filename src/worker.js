@@ -1,7 +1,9 @@
 const crypto = require("crypto");
 const { bboxIntersectsGeometry, bboxRadiusMeters, splitBBox, canSplitBBox } = require("./geo");
-const { resolveCountry, queryFoursquare } = require("./foursquare");
+const { resolveCountry, queryFoursquare, probeFoursquareCredits } = require("./foursquare");
 const { writeArtifacts } = require("./exporters");
+
+const CREDIT_GUARD_PAUSE_PREFIX = "Paused automatically: Foursquare credits reached the minimum threshold.";
 
 function createWorker({ store, config, nocoDb = null }) {
   let timer = null;
@@ -26,8 +28,12 @@ function createWorker({ store, config, nocoDb = null }) {
         recoverStaleRunningShards();
         await bootstrapPendingJobs();
 
-        // Refuse to process shards when credits are critically low
-        if (creditsExhausted()) return;
+        // Refuse to process shards when credits are critically low.
+        // Probe once a day and auto-resume credit-paused jobs when quota refreshes.
+        if (creditsExhausted()) {
+          await maybeProbeCreditsAndResume();
+          return;
+        }
 
         const shard = store.claimNextShard();
         if (!shard) { await maybeSyncRunningJobs(); return; }
@@ -49,23 +55,61 @@ function createWorker({ store, config, nocoDb = null }) {
   function creditsExhausted() {
     const remaining = store.getAppSetting("foursquare.remainingCredits", -1);
     if (remaining < 0) return false; // never seen a header yet — allow through
-    return remaining < config.foursquareMinCreditsRemaining;
+    return remaining <= config.foursquareMinCreditsRemaining;
   }
 
   // Called after every successful or failed API response that includes a credit count.
   function applyRemainingCredits(remainingCredits) {
     if (!Number.isFinite(remainingCredits) || remainingCredits < 0) return;
     store.setAppSettings({ "foursquare.remainingCredits": remainingCredits });
-    if (remainingCredits < config.foursquareMinCreditsRemaining) {
+    if (remainingCredits <= config.foursquareMinCreditsRemaining) {
       console.warn(
         `[credit-guard] Foursquare credits critically low: ${remainingCredits} remaining ` +
         `(floor: ${config.foursquareMinCreditsRemaining}). Pausing all running jobs.`
       );
       for (const job of store.listJobs().filter((j) => j.status === "running")) {
-        store.pauseJob(job.id);
+        store.pauseJob(job.id, `${CREDIT_GUARD_PAUSE_PREFIX} Remaining credits: ${remainingCredits}.`);
         console.warn(`[credit-guard] Paused job ${job.id} (${job.country} / ${job.keyword}).`);
       }
     }
+  }
+
+  async function maybeProbeCreditsAndResume() {
+    const pausedJobs = store
+      .listJobs()
+      .filter((job) => job.status === "paused" && isCreditGuardPaused(job.message));
+    if (pausedJobs.length === 0) return;
+
+    const lastProbeAt = store.getAppSetting("foursquare.lastCreditProbeAt", null);
+    if (lastProbeAt) {
+      const nextProbeAt = new Date(lastProbeAt).getTime() + config.foursquareCreditProbeIntervalMs;
+      if (Date.now() < nextProbeAt) return;
+    }
+
+    store.setAppSettings({ "foursquare.lastCreditProbeAt": new Date().toISOString() });
+
+    try {
+      const remainingCredits = await probeFoursquareCredits(config);
+      applyRemainingCredits(remainingCredits);
+
+      if (creditsExhausted()) return;
+
+      for (const job of pausedJobs) {
+        store.resumeJob(job.id);
+        console.warn(
+          `[credit-guard] Resumed job ${job.id} (${job.country} / ${job.keyword}) after credit probe reported ${remainingCredits} remaining.`
+        );
+      }
+    } catch (error) {
+      if (Number.isFinite(error.remainingCredits)) {
+        applyRemainingCredits(error.remainingCredits);
+      }
+      console.warn(`[credit-guard] Credit probe failed: ${error.message}`);
+    }
+  }
+
+  function isCreditGuardPaused(message) {
+    return String(message || "").startsWith(CREDIT_GUARD_PAUSE_PREFIX);
   }
 
   async function bootstrapPendingJobs() {

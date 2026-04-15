@@ -1,6 +1,6 @@
 # foursquare-country-scraper
 
-Country-scale place scraper powered by the [current Foursquare Places API](https://docs.foursquare.com/fsq-developers-places/reference/place-search). Splits a country bounding box into a quadtree of shards, queries each shard at its centroid with a configurable radius, and recursively splits shards that hit the 50-result cap.
+Country-scale place scraper powered by the [current Foursquare Places API](https://docs.foursquare.com/fsq-developers-places/reference/place-search). Splits a country bounding box into a quadtree of shards, queries each shard with exact `sw`/`ne` bounds, and recursively splits shards that hit the 50-result cap.
 
 Architecture mirrors [gmaps-country-scraper](https://github.com/lutzkind/gmaps-country-scraper) and [osm-country-scraper](https://github.com/lutzkind/osm-country-scraper).
 
@@ -17,6 +17,8 @@ Architecture mirrors [gmaps-country-scraper](https://github.com/lutzkind/gmaps-c
 | `FOURSQUARE_DELAY_MS` | No | `200` | Delay between API requests (ms) |
 | `FOURSQUARE_TIMEOUT_MS` | No | `30000` | Request timeout (ms) |
 | `FOURSQUARE_TARGET_SHARD_RADIUS_METERS` | No | `15000` | Target shard radius; shards larger than this are split |
+| `FOURSQUARE_MIN_CREDITS_REMAINING` | No | `0` | Pause jobs only when remaining credits drop to this floor or below |
+| `FOURSQUARE_CREDIT_PROBE_INTERVAL_MS` | No | `86400000` | Interval for a cheap credit probe that can auto-resume credit-paused jobs |
 | `RESULT_SPLIT_THRESHOLD` | No | `50` | Split a shard when result count hits this (Foursquare max is 50) |
 
 ## Running with Docker
@@ -38,6 +40,7 @@ docker run -d \
 - Requests are sent as `Authorization: Bearer <service_api_key>`.
 - Do not use `Client ID` / `Client Secret` from the legacy OAuth section for this scraper.
 - Do not use a Legacy API Key for the new Places Search endpoint.
+- Jobs use the monthly free quota down to `0` by default, then pause and probe once per day for automatic resume.
 
 ## API
 

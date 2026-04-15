@@ -1,6 +1,7 @@
 const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
+const turf = require("@turf/turf");
 const Database = require("better-sqlite3");
 const { extractLocationParts } = require("./foursquare");
 
@@ -48,6 +49,7 @@ function createStore(config) {
       status TEXT NOT NULL,
       result_count INTEGER NOT NULL DEFAULT 0,
       attempt_count INTEGER NOT NULL DEFAULT 0,
+      priority REAL NOT NULL DEFAULT 0,
       run_token TEXT,
       next_run_at TEXT NOT NULL,
       last_error TEXT,
@@ -124,14 +126,17 @@ function createStore(config) {
     );
   `);
 
-  ensureLeadColumns(db, "leads", [
+  ensureColumns(db, "leads", [
     ["city", "TEXT"],
     ["area", "TEXT"],
     ["state_region", "TEXT"],
     ["postcode", "TEXT"],
     ["country", "TEXT"],
   ]);
-  ensureLeadColumns(db, "shards", [["run_token", "TEXT"]]);
+  ensureColumns(db, "shards", [
+    ["run_token", "TEXT"],
+    ["priority", "REAL NOT NULL DEFAULT 0"],
+  ]);
   backfillLeadLocations(db);
 
   resetRunningShards(db);
@@ -189,15 +194,16 @@ function createStore(config) {
         db.prepare(
           `
             INSERT INTO shards (
-              job_id, bbox_json, depth, status, next_run_at,
+              job_id, bbox_json, depth, priority, status, next_run_at,
               created_at, updated_at
             ) VALUES (
-              @jobId, @bboxJson, 0, 'pending', @timestamp, @timestamp, @timestamp
+              @jobId, @bboxJson, 0, @priority, 'pending', @timestamp, @timestamp, @timestamp
             )
           `
         ).run({
           jobId,
           bboxJson: JSON.stringify(countryData.bbox),
+          priority: 0,
           timestamp,
         });
       })();
@@ -665,10 +671,10 @@ function createStore(config) {
       return this.getJob(jobId);
     },
 
-    pauseJob(jobId) {
+    pauseJob(jobId, message = "Paused by operator.") {
       db.prepare(
-        `UPDATE jobs SET status = 'paused', message = 'Paused by operator.', updated_at = @timestamp WHERE id = @jobId`
-      ).run({ jobId, timestamp: nowIso() });
+        `UPDATE jobs SET status = 'paused', message = @message, updated_at = @timestamp WHERE id = @jobId`
+      ).run({ jobId, message, timestamp: nowIso() });
       return this.getJob(jobId);
     },
 
@@ -729,7 +735,7 @@ function createStore(config) {
             WHERE s.status IN ('pending', 'retry')
               AND s.next_run_at <= @timestamp
               AND j.status = 'running'
-            ORDER BY s.depth DESC, s.updated_at ASC, s.id ASC
+            ORDER BY COALESCE(s.priority, 0) ASC, s.depth DESC, s.updated_at ASC, s.id ASC
             LIMIT 1
           `
         )
@@ -758,11 +764,18 @@ function createStore(config) {
           `UPDATE shards SET status = 'split', run_token = NULL, updated_at = @timestamp WHERE id = @id ${buildOwnedRunningShardClause(runToken)}`
         ).run(buildOwnedRunningShardParams({ id: shardId, timestamp, runToken }));
         if (updated.changes === 0) return null;
+        const job = this.getJob(shard.jobId);
         const insert = db.prepare(
-          `INSERT INTO shards (job_id, bbox_json, depth, status, next_run_at, created_at, updated_at) VALUES (@jobId, @bboxJson, @depth, 'pending', @timestamp, @timestamp, @timestamp)`
+          `INSERT INTO shards (job_id, bbox_json, depth, priority, status, next_run_at, created_at, updated_at) VALUES (@jobId, @bboxJson, @depth, @priority, 'pending', @timestamp, @timestamp, @timestamp)`
         );
         for (const bbox of childBBoxes) {
-          insert.run({ jobId: shard.jobId, bboxJson: JSON.stringify(bbox), depth: shard.depth + 1, timestamp });
+          insert.run({
+            jobId: shard.jobId,
+            bboxJson: JSON.stringify(bbox),
+            depth: shard.depth + 1,
+            priority: computeShardPriority(job, bbox),
+            timestamp,
+          });
         }
         return shard.jobId;
       })();
@@ -974,7 +987,7 @@ function omitRunToken(params) {
   return rest;
 }
 
-function ensureLeadColumns(db, tableName, columns) {
+function ensureColumns(db, tableName, columns) {
   const existing = new Set(
     db.prepare(`PRAGMA table_info(${tableName})`).all().map((column) => column.name)
   );
@@ -983,6 +996,37 @@ function ensureLeadColumns(db, tableName, columns) {
       db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${name} ${type}`);
     }
   }
+}
+
+function computeShardPriority(job, bbox) {
+  const reference = getJobReferencePoint(job);
+  if (!reference) return 0;
+
+  const shardCenter = turf.point([(bbox.west + bbox.east) / 2, (bbox.south + bbox.north) / 2]);
+  return turf.distance(shardCenter, reference, { units: "kilometers" });
+}
+
+function getJobReferencePoint(job) {
+  if (!job) return null;
+  if (job.countryGeometry) {
+    try {
+      return turf.centerOfMass(job.countryGeometry);
+    } catch {
+      try {
+        return turf.centroid(job.countryGeometry);
+      } catch {
+        // Fall through to bbox-based reference.
+      }
+    }
+  }
+
+  if (job.countryBBox) {
+    const lon = (job.countryBBox.west + job.countryBBox.east) / 2;
+    const lat = (job.countryBBox.south + job.countryBBox.north) / 2;
+    return turf.point([lon, lat]);
+  }
+
+  return null;
 }
 
 function backfillLeadLocations(db) {
@@ -1043,6 +1087,7 @@ function deserializeShardRow(row) {
     status: row.status,
     resultCount: row.result_count,
     attemptCount: row.attempt_count,
+    priority: row.priority ?? 0,
     runToken: row.run_token || null,
     nextRunAt: row.next_run_at,
     lastError: row.last_error,

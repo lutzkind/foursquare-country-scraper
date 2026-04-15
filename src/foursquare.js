@@ -1,8 +1,13 @@
-const { bboxCenter, bboxRadiusMeters, pointInsideBBox, pointInsideGeometry } = require("./geo");
+const { bboxCenter, pointInsideBBox, pointInsideGeometry } = require("./geo");
 
 const SEARCH_URL = "https://places-api.foursquare.com/places/search";
-const MAX_RADIUS_METERS = 100000;
 const PAGE_LIMIT = 50;
+const CREDIT_PROBE_BBOX = {
+  south: 40.7400,
+  west: -74.0000,
+  north: 40.7600,
+  east: -73.9700,
+};
 
 let foursquareThrottle = Promise.resolve();
 
@@ -38,15 +43,10 @@ async function resolveCountry(countryName, config) {
 
 async function queryFoursquare({ job, shard, geometry, config }) {
   const center = bboxCenter(shard.bbox);
-  const radiusMeters = Math.min(Math.round(bboxRadiusMeters(shard.bbox) / 2), MAX_RADIUS_METERS);
   const query = job.searchParams?.query || job.keyword;
 
   const raw = await queueFoursquareRequest(async () => {
-    const params = new URLSearchParams({
-      ll: `${center.lat},${center.lon}`,
-      radius: String(radiusMeters),
-      limit: String(PAGE_LIMIT),
-    });
+    const params = buildSearchParams(shard.bbox, query);
     if (query) params.set("query", query);
 
     const response = await fetch(`${SEARCH_URL}?${params}`, {
@@ -87,6 +87,45 @@ async function queryFoursquare({ job, shard, geometry, config }) {
     });
 
   return { rawCount, leads, remainingCredits };
+}
+
+async function probeFoursquareCredits(config) {
+  const params = buildSearchParams(CREDIT_PROBE_BBOX, "restaurant");
+  const response = await queueFoursquareRequest(
+    () =>
+      fetch(`${SEARCH_URL}?${params}`, {
+        headers: {
+          Accept: "application/json",
+          Authorization: buildAuthorizationHeader(config.foursquareApiKey),
+          "X-Places-Api-Version": config.foursquareApiVersion,
+        },
+        signal: AbortSignal.timeout(config.foursquareTimeoutMs),
+      }),
+    config.foursquareDelayMs
+  );
+
+  const remainingCredits = parseRateLimitHeader(response);
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    const err = new Error(`Foursquare credit probe failed ${response.status}: ${text.slice(0, 200)}`);
+    err.statusCode = response.status;
+    err.remainingCredits = remainingCredits;
+    err.responseText = text;
+    throw err;
+  }
+
+  await response.arrayBuffer().catch(() => null);
+  return remainingCredits;
+}
+
+function buildSearchParams(bbox, query = null) {
+  const params = new URLSearchParams({
+    sw: `${bbox.south},${bbox.west}`,
+    ne: `${bbox.north},${bbox.east}`,
+    limit: String(PAGE_LIMIT),
+  });
+  if (query) params.set("query", query);
+  return params;
 }
 
 function parseRateLimitHeader(response) {
@@ -168,6 +207,7 @@ function extractLocationParts(place) {
 module.exports = {
   resolveCountry,
   queryFoursquare,
+  probeFoursquareCredits,
   normalizeEntry,
   extractLocationParts,
   buildAuthorizationHeader,
