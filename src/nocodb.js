@@ -245,7 +245,7 @@ function buildRecord(job, lead, availableFields) {
     lead_country: lead.country || "",
     complete_address_json: JSON.stringify(lead.completeAddress || null),
     review_count: lead.reviewCount || 0,
-    review_rating: lead.reviewRating ?? "",
+    review_rating: lead.reviewRating ?? null,
     business_status: lead.status || "",
     price_range: lead.priceRange || "",
     raw_json: JSON.stringify(lead.raw || {}),
@@ -288,20 +288,35 @@ async function createColumn(settings, field) {
 
 async function createRecords(settings, records) {
   if (!records.length) return null;
-  return apiRequestFallback(settings, [
+  let lastError = null;
+  for (const attempt of [
     {
       pathname: `/api/v2/tables/${encodeURIComponent(settings.tableId)}/records`,
-      method: "POST", body: records,
+      method: "POST",
+      body: records,
     },
     {
       pathname: `/api/v1/db/data/noco/${encodeURIComponent(settings.baseId)}/${encodeURIComponent(settings.tableId)}`,
-      method: "POST", body: records,
+      method: "POST",
+      body: records,
     },
     {
       pathname: `/api/v1/db/data/noco/${encodeURIComponent(settings.baseId)}/${encodeURIComponent(settings.tableId)}`,
-      method: "POST", body: { list: records },
+      method: "POST",
+      body: { list: records },
     },
-  ]);
+  ]) {
+    try {
+      return await apiRequest(settings, attempt.pathname, attempt);
+    } catch (error) {
+      lastError = error;
+      // Validation failures must surface immediately. Falling back to legacy
+      // payload shapes on 400 can create blank shell rows in NocoDB.
+      if (error.statusCode === 400) throw error;
+      if (error.statusCode !== 404) throw error;
+    }
+  }
+  throw lastError || createHttpError(500, "NocoDB request failed.");
 }
 
 async function apiRequest(settings, pathname, options = {}) {
