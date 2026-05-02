@@ -14,19 +14,17 @@ function createApp({ store, config, nocoDb }) {
   app.get("/health", (_req, res) => res.json({ ok: true }));
 
   app.get("/", (req, res) => {
-    if (!auth.isConfigured()) return res.redirect("/login");
-    return res.redirect(auth.currentSession(req) ? "/dashboard" : "/login");
+    return res.redirect("/dashboard");
   });
 
   app.get("/login", (req, res) => {
-    if (auth.isConfigured() && auth.currentSession(req)) return res.redirect("/dashboard");
     res.sendFile(path.join(__dirname, "..", "public", "login.html"));
   });
 
   app.post("/api/auth/login", (req, res) => auth.handleLogin(req, res));
   app.post("/api/auth/logout", withAuth(auth), (req, res) => auth.handleLogout(req, res));
   app.get("/api/auth/session", withAuth(auth), (req, res) => {
-    res.json({ authenticated: true, username: req.authSession.username, expiresAt: req.authSession.expiresAt });
+    res.json({ authenticated: true, username: req.authSession && req.authSession.username, expiresAt: req.authSession && req.authSession.expiresAt });
   });
 
   app.get("/dashboard", withAuth(auth), (_req, res) => {
