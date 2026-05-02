@@ -15,11 +15,7 @@ function createAuth({ store, config }) {
       return { ...session, expiresAt };
     },
     requireAuth(req, res, next) {
-      if (!this.isConfigured()) return respondAuthNotConfigured(req, res);
-      const session = this.currentSession(req);
-      if (!session) return respondUnauthorized(req, res);
-      req.authSession = session;
-      setSessionCookie(res, config.sessionCookieName, session.id, session.expiresAt);
+      // Auth is handled by OAuth2 Proxy at the Traefik level
       return next();
     },
     handleLogin(req, res) {
