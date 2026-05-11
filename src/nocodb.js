@@ -45,7 +45,7 @@ function createNocoDbService({ store, config }) {
     },
 
     async testConnection(input = null) {
-      const settings = resolveSettings(store, input);
+      const settings = applyServerBaseUrl(resolveSettings(store, input), config);
       validateSettings(settings);
       const columns = await listColumns(settings);
       return {
@@ -70,7 +70,10 @@ function createNocoDbService({ store, config }) {
     },
 
     async syncJob(jobId, options = {}) {
-      const settings = resolveSettings(store, options.config);
+      const settings = applyServerBaseUrl(
+        resolveSettings(store, options.config),
+        config
+      );
       validateSettings(settings);
       const job = store.getJob(jobId);
       if (!job) throw createHttpError(404, "Job not found.");
@@ -188,6 +191,18 @@ function toPublicConfig(settings) {
     autoSyncIntervalMinutes: settings.autoSyncIntervalMinutes || 0,
     autoCreateColumns: settings.autoCreateColumns !== false,
     hasApiToken: Boolean(settings.apiToken),
+  };
+}
+
+function applyServerBaseUrl(settings, config) {
+  const internalBaseUrl = cleanString(config?.nocoDb?.internalBaseUrl);
+  if (!internalBaseUrl) {
+    return settings;
+  }
+
+  return {
+    ...settings,
+    baseUrl: internalBaseUrl,
   };
 }
 

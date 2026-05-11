@@ -36,7 +36,11 @@ function createWorker({ store, config, nocoDb = null }) {
         }
 
         const shard = store.claimNextShard();
-        if (!shard) { await maybeSyncRunningJobs(); return; }
+        if (!shard) {
+          await maybeSyncRunningJobs();
+          await reconcileTerminalJobs();
+          return;
+        }
         const job = store.getJob(shard.jobId);
         if (!job || job.status !== "running") return;
         const geometry = job.countryGeometry
@@ -238,6 +242,16 @@ function createWorker({ store, config, nocoDb = null }) {
   function recoverStaleRunningShards() {
     for (const jobId of store.reclaimStaleRunningShards(config.runningShardStaleMs)) {
       console.warn(`Recovered stale running shard(s) for job ${jobId}.`);
+    }
+  }
+
+  async function reconcileTerminalJobs() {
+    const runningJobs = store
+      .listJobs()
+      .filter((job) => job.status === "running");
+
+    for (const job of runningJobs) {
+      await maybeFinalizeJob(job.id);
     }
   }
 }

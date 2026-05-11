@@ -75,6 +75,7 @@ module.exports = {
   ),
   nocoDb: {
     baseUrl: process.env.NOCODB_BASE_URL || null,
+    internalBaseUrl: process.env.NOCODB_INTERNAL_BASE_URL || null,
     apiToken: process.env.NOCODB_API_TOKEN || null,
     baseId: process.env.NOCODB_BASE_ID || null,
     tableId: process.env.NOCODB_TABLE_ID || null,
